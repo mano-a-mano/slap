@@ -9,8 +9,6 @@ public class KitchenGameManager : NetworkBehaviour {
 
     public static KitchenGameManager Instance { get; private set; }
 
-
-
     public event EventHandler OnStateChanged;
     public event EventHandler OnLocalGamePaused;
     public event EventHandler OnLocalGameUnpaused;
