@@ -4,5 +4,6 @@ public enum MatchPhase : ushort
     Attack = 1,
     Defend = 2,
     Resolve = 3,
-    Transition = 4
+    Transition = 4,
+    MatchOver = 5
 }

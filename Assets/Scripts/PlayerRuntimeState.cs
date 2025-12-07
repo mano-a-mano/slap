@@ -8,4 +8,5 @@ public struct PlayerRuntimeState
     public int SlapsLeft;      // starts at 3 per round
     public float Advantage;    // can be 0.5 increments
     public int SetWins;        // best-of-3
+    public string Name;
 }

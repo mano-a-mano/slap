@@ -2,17 +2,14 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
-// Server-side collector for per-phase commits.
-// Listens to phase channel (no direct coordinator ref).
+// Server-side collector for per-phase commits; now stores target for FFA.
 public class CommitBuffer : NetworkBehaviour
 {
     [Header("Phase Event Channel (assign)")]
     public PhaseChangedChannel phaseChangedChannel;
 
-    [Header("Attack phase completion (assign)")]
+    [Header("Phase completion (assign)")]
     public AttackAllSubmittedChannel attackAllSubmittedChannel;
-
-    [Header("Defense phase completion (assign)")]
     public DefenseAllSubmittedChannel defenseAllSubmittedChannel;
 
     // --- Storage ---
@@ -25,6 +22,7 @@ public class CommitBuffer : NetworkBehaviour
     private struct AttackCommit
     {
         public ulong Attacker;
+        public ulong Target;           // NEW for FFA
         public SlapDirection Dir;
         public int Power;
     }
@@ -33,15 +31,16 @@ public class CommitBuffer : NetworkBehaviour
     {
         public ulong Defender;
         public SlapDirection Dir;
+        // NOTE: for FFA (multiple incoming attacks), we’ll extend with per-attacker defense later.
     }
 
-    private void OnEnable()
+    void OnEnable()
     {
         if (phaseChangedChannel != null)
             phaseChangedChannel.OnPhaseChanged += OnPhaseChanged;
     }
 
-    private void OnDisable()
+    void OnDisable()
     {
         if (phaseChangedChannel != null)
             phaseChangedChannel.OnPhaseChanged -= OnPhaseChanged;
@@ -71,7 +70,7 @@ public class CommitBuffer : NetworkBehaviour
         }
     }
 
-    // ----------------- ATTACK (client -> server) -----------------
+    // -------- ATTACK (1v1 legacy) --------
     public void SubmitAttackFromClient(SlapDirection dir, int power)
     {
         if (IsClient) SubmitAttackServerRpc(dir, power);
@@ -81,14 +80,38 @@ public class CommitBuffer : NetworkBehaviour
     private void SubmitAttackServerRpc(SlapDirection dir, int power, RpcParams rpcParams = default)
     {
         if (!_acceptingAttacks) return;
-
         ulong sender = rpcParams.Receive.SenderClientId;
         if (_attackCommits.ContainsKey(sender)) return;
 
-        if (power < 0) power = 0;
-        if (power > 999) power = 999;
+        power = Mathf.Clamp(power, 0, 999);
+        _attackCommits[sender] = new AttackCommit { Attacker = sender, Target = 0, Dir = dir, Power = power };
 
-        _attackCommits[sender] = new AttackCommit { Attacker = sender, Dir = dir, Power = power };
+        if (AllExpectedAttackSubmissionsReceived())
+            attackAllSubmittedChannel?.Raise();
+    }
+
+    // -------- ATTACK (FFA with target) --------
+    public void SubmitAttackFromClient_FFA(SlapDirection dir, int power, ulong targetClientId)
+    {
+        if (IsClient) SubmitAttackFFAServerRpc(dir, power, targetClientId);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void SubmitAttackFFAServerRpc(SlapDirection dir, int power, ulong targetClientId, RpcParams rpcParams = default)
+    {
+        if (!_acceptingAttacks) return;
+
+        ulong sender = rpcParams.Receive.SenderClientId;
+        if (_attackCommits.ContainsKey(sender)) return; // one attack per attacker per window
+
+        power = Mathf.Clamp(power, 0, 999);
+        _attackCommits[sender] = new AttackCommit
+        {
+            Attacker = sender,
+            Target = targetClientId,
+            Dir = dir,
+            Power = power
+        };
 
         if (AllExpectedAttackSubmissionsReceived())
             attackAllSubmittedChannel?.Raise();
@@ -100,6 +123,7 @@ public class CommitBuffer : NetworkBehaviour
         return _attackCommits.Count >= need && need > 0;
     }
 
+    // 1v1 accessor kept for backward-compat with current Resolve_1v1 path.
     public bool TryGetAllAttackCommits(out Dictionary<ulong, (SlapDirection dir, int power)> data)
     {
         data = null;
@@ -108,11 +132,22 @@ public class CommitBuffer : NetworkBehaviour
         var dict = new Dictionary<ulong, (SlapDirection, int)>(_attackCommits.Count);
         foreach (var kv in _attackCommits)
             dict[kv.Key] = (kv.Value.Dir, kv.Value.Power);
+
         data = dict;
         return true;
     }
 
-    // ----------------- DEFENSE (client -> server) -----------------
+
+    public bool TryGetAllAttackCommits_FFA(out Dictionary<ulong, (ulong target, SlapDirection dir, int power)> data)
+    {
+        data = null; if (!IsServer) return false;
+        var dict = new Dictionary<ulong, (ulong, SlapDirection, int)>(_attackCommits.Count);
+        foreach (var kv in _attackCommits)
+            dict[kv.Key] = (kv.Value.Target, kv.Value.Dir, kv.Value.Power);
+        data = dict; return true;
+    }
+
+    // -------- DEFENSE (unchanged for now; FFA per-attacker defense in next step) --------
     public void SubmitDefenseFromClient(SlapDirection dir)
     {
         if (IsClient) SubmitDefenseServerRpc(dir);
@@ -126,8 +161,6 @@ public class CommitBuffer : NetworkBehaviour
         ulong sender = rpcParams.Receive.SenderClientId;
         if (_defenseCommits.ContainsKey(sender)) return;
 
-        // 1v1: each player defends exactly once (against the opponent's attack)
-        // Later: in FFA we'll map attacker->defender sets and require multiple defenses.
         _defenseCommits[sender] = new DefenseCommit { Defender = sender, Dir = dir };
 
         if (AllExpectedDefenseSubmissionsReceived())
@@ -136,20 +169,16 @@ public class CommitBuffer : NetworkBehaviour
 
     private bool AllExpectedDefenseSubmissionsReceived()
     {
-        // In 1v1, both players defend once
         int need = NetworkManager.Singleton != null ? NetworkManager.Singleton.ConnectedClientsIds.Count : 0;
         return _defenseCommits.Count >= need && need > 0;
     }
 
     public bool TryGetAllDefenseCommits(out Dictionary<ulong, SlapDirection> data)
     {
-        data = null;
-        if (!IsServer) return false;
-
+        data = null; if (!IsServer) return false;
         var dict = new Dictionary<ulong, SlapDirection>(_defenseCommits.Count);
         foreach (var kv in _defenseCommits)
             dict[kv.Key] = kv.Value.Dir;
-        data = dict;
-        return true;
+        data = dict; return true;
     }
 }

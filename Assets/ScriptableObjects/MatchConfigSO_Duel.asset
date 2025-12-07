@@ -17,7 +17,7 @@ MonoBehaviour:
   maxPlayers: 2
   powerPerRound: 100
   slapsPerRound: 3
-  roundPhaseTimerSeconds: 10
+  roundPhaseTimerSeconds: 30
   bestOfSets: 3
   flurryAttacks: 5
   flurryAttackPoints: 1

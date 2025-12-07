@@ -21,3 +21,4 @@ EditorBuildSettings:
     path: Assets/Scenes/CharacterSelectScene.unity
     guid: ef11a265631e36c42a4f15c9b9aa6bc3
   m_configObjects: {}
+  m_UseUCBPForAssetBundles: 0
